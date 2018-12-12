@@ -1,0 +1,28 @@
+version: 1
+formatters:
+  simple:
+    format: '[%(asctime)s]%(levelname)s - [%(threadName)s] - %(module)s.%(funcName)s(%(lineno)d): %(message)s'
+handlers:
+  console:
+    class: logging.StreamHandler
+    level: DEBUG
+    formatter: simple
+    stream: ext://sys.stdout
+  console_err:
+    class: logging.StreamHandler
+    level: ERROR
+    formatter: simple
+    stream: ext://sys.stderr
+  file:
+    class: logging.handlers.TimedRotatingFileHandler
+    level: INFO
+    formatter: simple
+    filename: ../logs/servergui.log
+    when: MIDNIGHT
+    interval: 1
+    backupCount: 3
+
+root:
+  level: DEBUG
+  handlers:  [console]
+
