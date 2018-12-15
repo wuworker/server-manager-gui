@@ -262,5 +262,3 @@ class InteractiveTerminalUI(AsyncTerminalUI):
             self.stop(True)
             e.last_output = res
             raise e
-        except pexpect.TIMEOUT as e:
-            raise e
