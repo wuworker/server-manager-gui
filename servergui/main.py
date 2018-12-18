@@ -3,8 +3,10 @@ Create by wuxingle on 2018/12/3
 服务管理界面
 """
 
-from tkinter import *
-from tkinter import ttk
+from servergui.termwidgets import *
+from servergui import logger
+
+log = logger.get(__name__)
 
 
 class CmdData:
@@ -12,13 +14,14 @@ class CmdData:
     TYPE_OF_LOOP = 1
     TYPE_OF_INTERACTIVE = 2
 
-    def __init__(self, name, cmd, tp):
+    def __init__(self, name, cmd, tp, expects=None):
         self.name = name
         self.cmd = cmd
         self.tp = tp
+        self.expects = expects
 
     def __str__(self):
-        return 'name:%s,cmd:%s,tp:%s' % (self.name, self.cmd, self.tp)
+        return 'name:%s,cmd:%s,tp:%s,expects:%s' % (self.name, self.cmd, self.tp, self.expects)
 
     __repr__ = __str__
 
@@ -86,7 +89,7 @@ class MainUI(ttk.Frame):
         i = 2
         for btn_data in data.btn_list:
             btn = ttk.Button(fra, text=btn_data.name,
-                             command=self.__invoke_cmd(btn_data.cmd, btn_data.tp))
+                             command=self.__invoke_cmd(data.title + ' -> ' + btn_data.name, btn_data))
             btn.grid(row=i, column=0, columnspan=2, sticky=(W, E), padx=10, pady=5)
             i = i + 1
 
@@ -95,8 +98,25 @@ class MainUI(ttk.Frame):
 
         return fra
 
-    def __invoke_cmd(self, cmd, tp):
-        pass
+    def __invoke_cmd(self, title, cmd_data):
+        def click(*args):
+            win = Toplevel()
+            win.title(title)
+            term = None
+            if cmd_data.tp == CmdData.TYPE_OF_NORMAL:
+                term = OnceTerminalUI(master=win, cmd=cmd_data.cmd)
+            elif cmd_data.tp == CmdData.TYPE_OF_LOOP:
+                pass
+            elif cmd_data.tp == CmdData.TYPE_OF_INTERACTIVE:
+                term = InteractiveTerminalUI(master=win, cmd_start=cmd_data.cmd, expects=cmd_data.expects)
+            else:
+                log.warning('the cmdData type is not allowed:%s', cmd_data.tp)
+                return
+
+            term.grid(row=0, column=0, sticky=(N, S, W, E))
+            term.start()
+
+        return click
 
     def __add_btn(self):
         pass
@@ -122,19 +142,20 @@ if __name__ == '__main__':
     root.title('服务管理')
     root.resizable(False, False)
 
-    mysql_list = [CmdData('启动', 'ssss', CmdData.TYPE_OF_NORMAL),
-                  CmdData('停止', 'ssss', CmdData.TYPE_OF_NORMAL),
-                  CmdData('重启', 'ssss', CmdData.TYPE_OF_NORMAL),
-                  CmdData('日志', 'ssss', CmdData.TYPE_OF_LOOP),
-                  CmdData('终端', 'ssss', CmdData.TYPE_OF_INTERACTIVE)]
+    mysql_list = [CmdData('启动', '/usr/local/bin/mysql.server start', CmdData.TYPE_OF_NORMAL),
+                  CmdData('停止', '/usr/local/bin/mysql.server stop', CmdData.TYPE_OF_NORMAL),
+                  CmdData('重启', '/usr/local/bin/mysql.server restart', CmdData.TYPE_OF_NORMAL),
+                  CmdData('日志', 'ls', CmdData.TYPE_OF_LOOP),
+                  CmdData('终端', ['mysql -uroot -p', 'password', '123456', 'mysql>'],
+                          CmdData.TYPE_OF_INTERACTIVE, expects='>')]
 
     mysql_data = ServerData(title='mysql', status_cmd='ps -ef|grep mysql', btn_list=mysql_list)
 
-    redis_list = [CmdData('启动1', 'ssss', CmdData.TYPE_OF_NORMAL),
-                  CmdData('停止1', 'ssss', CmdData.TYPE_OF_NORMAL),
-                  CmdData('重启1', 'ssss', CmdData.TYPE_OF_NORMAL),
-                  CmdData('日志1', 'ssss', CmdData.TYPE_OF_LOOP),
-                  CmdData('终端1', 'ssss', CmdData.TYPE_OF_INTERACTIVE)]
+    redis_list = [CmdData('启动1', 'ls', CmdData.TYPE_OF_NORMAL),
+                  CmdData('停止1', 'ls', CmdData.TYPE_OF_NORMAL),
+                  CmdData('重启1', 'ls', CmdData.TYPE_OF_NORMAL),
+                  CmdData('日志1', 'ls', CmdData.TYPE_OF_LOOP),
+                  CmdData('终端1', 'ls', CmdData.TYPE_OF_INTERACTIVE)]
 
     redis_data = ServerData(title='redis', status_cmd='ps -ef|grep redis', btn_list=redis_list)
 

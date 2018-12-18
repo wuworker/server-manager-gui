@@ -8,11 +8,59 @@ from io import BytesIO
 from tkinter import *
 from tkinter import ttk
 
+import subprocess
 import pexpect
 
 from servergui import logger
 
 log = logger.get(__name__)
+
+
+class OnceTerminalUI(ttk.Frame):
+    # 更新终端界面的事件
+    __UPDATE_CMD_RESULT_EVENT = "<<CmdHasReturn>>"
+
+    def __init__(self, master=None, cmd=None, timeout=5, **kw):
+        super().__init__(master, **kw)
+        self.cmd = cmd
+        self.timeout = timeout
+        self.__result = '> ' + cmd + '\n'
+        self.content = Text(self, wrap='none')
+        self.content.insert('end', self.__result)
+        self.content['state'] = 'disabled'
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        self.content.grid(row=0, column=0, sticky=(N, S, W, E))
+        self.bind(OnceTerminalUI.__UPDATE_CMD_RESULT_EVENT, self.__handle_update_event)
+
+    def start(self):
+        def task():
+            log.info('the once cmd handler thread has start,cmd:%s', self.cmd)
+            s = ''
+            try:
+                p = subprocess.Popen(self.cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True)
+                p.wait(timeout=self.timeout)
+                s = s + str(p.returncode) + '\n'
+                log.info('the once cmd handler thread exe return code:%s',s)
+                for line in p.stdout.readlines():
+                    s = s + line.decode('utf-8')
+            except Exception as e:
+                log.exception('the once cmd handle "%s" error:%s', self.cmd, e)
+                s = str(e)
+
+            self.__result = s
+            self.event_generate(OnceTerminalUI.__UPDATE_CMD_RESULT_EVENT)
+            log.info('the once cmd handler thread has end,cmd:%s,result:%s', self.cmd, self.__result)
+
+        t = threading.Thread(target=task, name='onceCmdHandlerThread')
+        t.setDaemon(True)
+        t.start()
+
+    def __handle_update_event(self, event):
+        self.content['state'] = 'normal'
+        self.content.insert('end', self.__result)
+        self.content.see('end -1 lines')
+        self.content['state'] = 'disabled'
 
 
 class TerminalUI(ttk.Frame):
