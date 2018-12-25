@@ -4,7 +4,6 @@ Create by wuxingle on 2018/12/3
 """
 
 from servergui.termwidgets import *
-from servergui import logger
 
 log = logger.get(__name__)
 
@@ -39,6 +38,7 @@ class ServerData:
 
 
 class MainUI(ttk.Frame):
+
     def __init__(self, master=None, datas=None, **kw):
         super().__init__(master, **kw)
         self.datas = datas
@@ -71,9 +71,31 @@ class MainUI(ttk.Frame):
         self.lbox.select_set(0)
         self.__listbox_select()
 
+        # 下面的命令结果
+        self.cmd_results = []
+        self.lab_var = StringVar()
+        self.lab_last_cmd = ttk.Label(self, textvariable=self.lab_var)
+        self.lab_last_cmd['justify'] = LEFT
+
+        def show_cmd_history(*args):
+            if len(self.cmd_results) > 0:
+                win = Toplevel()
+                win.title(self.cmd_results.pop(0))
+                content = Text(master=win, wrap='none')
+                for cmd in self.cmd_results:
+                    content.insert('end', cmd + '\n')
+
+                content.see('end -1 lines')
+                content['state'] = 'disabled'
+                content.grid()
+
+        self.lab_last_cmd.bind('<Button-1>', show_cmd_history)
+        self.lab_last_cmd.grid(row=2, column=0, columnspan=3, sticky=(W, E), padx=5)
+
         self.rowconfigure(1, weight=1)
-        self.columnconfigure(0, weight=1)
-        self.columnconfigure(1, weight=1)
+        self.columnconfigure(0, weight=2)
+        self.columnconfigure(1, weight=2)
+        self.columnconfigure(2, weight=1)
 
     def __create_frame(self, data) -> ttk.Frame:
         fra = ttk.Frame(self)
@@ -86,35 +108,63 @@ class MainUI(ttk.Frame):
         lab_status.grid(row=1, column=0, sticky=(W, E), padx=5, pady=5)
         btn_fresh.grid(row=1, column=1, sticky=(W, E), padx=5, pady=5)
 
+        fra.rowconfigure(0, weight=1)
+        fra.rowconfigure(1, weight=1)
+        fra.columnconfigure(0, weight=2)
+        fra.columnconfigure(1, weight=1)
+
         i = 2
         for btn_data in data.btn_list:
             btn = ttk.Button(fra, text=btn_data.name,
                              command=self.__invoke_cmd(data.title + ' -> ' + btn_data.name, btn_data))
-            btn.grid(row=i, column=0, columnspan=2, sticky=(W, E), padx=10, pady=5)
+            btn.grid(row=i, column=0, columnspan=2, sticky=(N, S, W, E), padx=10, pady=5)
+            fra.rowconfigure(i, weight=1)
             i = i + 1
 
         btn_add = ttk.Button(fra, text='➕', command=self.__add_btn)
         btn_add.grid(row=i, column=0, columnspan=2, sticky=(W, E), padx=10, pady=5)
+        fra.rowconfigure(i, weight=1)
 
         return fra
 
     def __invoke_cmd(self, title, cmd_data):
         def click(*args):
-            win = Toplevel()
-            win.title(title)
-            term = None
+            # 普通的命令
             if cmd_data.tp == CmdData.TYPE_OF_NORMAL:
-                term = OnceTerminalUI(master=win, cmd=cmd_data.cmd)
-            elif cmd_data.tp == CmdData.TYPE_OF_LOOP:
-                pass
+                def suc(code, lines):
+                    print('suc', code, lines)
+                    lines.insert(0, title)
+                    self.show_cmd_result(lines)
+
+                def err(e):
+                    print('err', e)
+                    self.show_cmd_result([title, str(e)])
+
+                self.lab_var.set(cmd_data.cmd)
+                async_shell = NormalShell(cmd_data.cmd, handler=suc, error_handler=err)
+                async_shell.invoke()
+
+            # 交互式命令
             elif cmd_data.tp == CmdData.TYPE_OF_INTERACTIVE:
+                win = Toplevel()
+                win.title(title)
+                win.rowconfigure(0,weight=1)
+                win.columnconfigure(0,weight=1)
                 term = InteractiveTerminalUI(master=win, cmd_start=cmd_data.cmd, expects=cmd_data.expects)
+                term.grid(row=0, column=0, sticky=(N, S, W, E))
+                term.start()
+
+            # 循环的命令
+            elif cmd_data.tp == CmdData.TYPE_OF_LOOP:
+                win = Toplevel()
+                win.title(title)
+                win.rowconfigure(0,weight=1)
+                win.columnconfigure(0,weight=1)
+                loop = LoopTerminalUI(master=win, cmd=cmd_data.cmd)
+                loop.grid(row=0, column=0, sticky=(N, S, W, E))
+                loop.start()
             else:
                 log.warning('the cmdData type is not allowed:%s', cmd_data.tp)
-                return
-
-            term.grid(row=0, column=0, sticky=(N, S, W, E))
-            term.start()
 
         return click
 
@@ -136,16 +186,29 @@ class MainUI(ttk.Frame):
 
         self.last_select = idx
 
+    def show_cmd_result(self, cmds):
+        '''
+        可能需要同步
+        :param cmds:
+        :return:
+        '''
+        self.cmd_results.clear()
+        for cmd in cmds:
+            self.lab_var.set(cmd)
+            self.cmd_results.append(cmd)
+
 
 if __name__ == '__main__':
     root = Tk()
     root.title('服务管理')
-    root.resizable(False, False)
+    root.resizable(True, True)
+    root.rowconfigure(0, weight=1)
+    root.columnconfigure(0, weight=1)
 
     mysql_list = [CmdData('启动', '/usr/local/bin/mysql.server start', CmdData.TYPE_OF_NORMAL),
                   CmdData('停止', '/usr/local/bin/mysql.server stop', CmdData.TYPE_OF_NORMAL),
                   CmdData('重启', '/usr/local/bin/mysql.server restart', CmdData.TYPE_OF_NORMAL),
-                  CmdData('日志', 'ls', CmdData.TYPE_OF_LOOP),
+                  CmdData('日志', 'tail -f /usr/local/var/log/mysql/error.log', CmdData.TYPE_OF_LOOP),
                   CmdData('终端', ['mysql -uroot -p', 'password', '123456', 'mysql>'],
                           CmdData.TYPE_OF_INTERACTIVE, expects='>')]
 

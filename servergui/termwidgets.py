@@ -3,12 +3,13 @@ Create by wuxingle on 2018/12/5
 简易终端
 """
 import queue
+import subprocess
 import threading
 from io import BytesIO
+from subprocess import signal
 from tkinter import *
 from tkinter import ttk
 
-import subprocess
 import pexpect
 
 from servergui import logger
@@ -16,51 +17,99 @@ from servergui import logger
 log = logger.get(__name__)
 
 
-class OnceTerminalUI(ttk.Frame):
-    # 更新终端界面的事件
-    __UPDATE_CMD_RESULT_EVENT = "<<CmdHasReturn>>"
-
-    def __init__(self, master=None, cmd=None, timeout=5, **kw):
-        super().__init__(master, **kw)
+class NormalShell:
+    def __init__(self, cmd, handler=None, error_handler=None, timeout=20):
         self.cmd = cmd
+        self.handler = handler
+        self.error_handler = error_handler
         self.timeout = timeout
-        self.__result = '> ' + cmd + '\n'
-        self.content = Text(self, wrap='none')
-        self.content.insert('end', self.__result)
-        self.content['state'] = 'disabled'
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(0, weight=1)
-        self.content.grid(row=0, column=0, sticky=(N, S, W, E))
-        self.bind(OnceTerminalUI.__UPDATE_CMD_RESULT_EVENT, self.__handle_update_event)
 
-    def start(self):
-        def task():
-            log.info('the once cmd handler thread has start,cmd:%s', self.cmd)
-            s = ''
-            try:
-                p = subprocess.Popen(self.cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True)
-                p.wait(timeout=self.timeout)
-                s = s + str(p.returncode) + '\n'
-                log.info('the once cmd handler thread exe return code:%s',s)
-                for line in p.stdout.readlines():
-                    s = s + line.decode('utf-8')
-            except Exception as e:
-                log.exception('the once cmd handle "%s" error:%s', self.cmd, e)
-                s = str(e)
-
-            self.__result = s
-            self.event_generate(OnceTerminalUI.__UPDATE_CMD_RESULT_EVENT)
-            log.info('the once cmd handler thread has end,cmd:%s,result:%s', self.cmd, self.__result)
-
-        t = threading.Thread(target=task, name='onceCmdHandlerThread')
+    def invoke(self):
+        t = threading.Thread(target=self.__task, name='NormalShellThread')
         t.setDaemon(True)
         t.start()
 
-    def __handle_update_event(self, event):
-        self.content['state'] = 'normal'
-        self.content.insert('end', self.__result)
-        self.content.see('end -1 lines')
-        self.content['state'] = 'disabled'
+    def __task(self):
+        log.info("exc '%s' start", self.cmd)
+        try:
+            p = subprocess.Popen(self.cmd, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, shell=True)
+            log.info("the normal shell thread '%s', pid :%s", self.cmd, p.pid)
+            p.wait(timeout=self.timeout)
+            code = p.returncode
+            lines_bytes = p.stdout.read().splitlines()
+            lines = list(map(lambda b: b.decode('utf-8'), lines_bytes))
+            if callable(self.handler):
+                self.handler(code, lines)
+            log.info("the normal shell thread end,cmd:%s, returncode:%s", self.cmd, code)
+        except Exception as e:
+            log.exception("the normal shell thread '%s' error:%s", self.cmd, e)
+            if callable(self.error_handler):
+                self.error_handler(e)
+
+
+class LoopShell:
+    def __init__(self, cmd, handler, error_handler=None):
+        self.cmd = cmd
+        self.handler = handler
+        self.error_handler = error_handler
+        self.__p = None
+
+    def start(self):
+        t = threading.Thread(target=self.__task, name='LoopShellThread')
+        t.setDaemon(True)
+        t.start()
+
+    def stop(self, force=False):
+        if self.__p is not None:
+            s = signal.SIGKILL if force else signal.SIGTERM
+            print(s)
+            self.__p.send_signal(s)
+
+    def __task(self):
+        log.info('the loop shell thread start,cmd:%s', self.cmd)
+        try:
+            self.__p = p = subprocess.Popen(self.cmd, stdout=subprocess.PIPE,
+                                            stderr=subprocess.PIPE, shell=True)
+            log.info("the loop shell thread '%s', pid :%s", self.cmd, p.pid)
+            while p.poll() is None:
+                line = p.stdout.readline()
+                if line == b'' and p.poll() is not None:
+                    break
+                self.handler(line)
+
+            log.info("the loop shell thread end,cmd:%s, returncode:%s", self.cmd, p.returncode)
+        except Exception as e:
+            log.exception("the loop shell thread '%s' error:%s", self.cmd, e)
+            if callable(self.error_handler):
+                self.error_handler(e)
+
+
+class LoopTerminalUI(ttk.Frame):
+    # 更新终端界面的事件
+    __UPDATE_CMD_RESULT_EVENT = "<<CmdHasReturn>>"
+
+    def __init__(self, master=None, cmd=None, **kw):
+        super().__init__(master, **kw)
+
+        def handler(line):
+            self.content.insert('end', line)
+
+        self.loopShell = LoopShell(cmd, handler)
+
+        self.content = Text(self, wrap='none')
+        self.content.insert('end', '> ' + cmd + '\n')
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        self.content.grid(row=0, column=0, sticky=(N, S, W, E))
+        # self.bind(OnceTerminalUI.__UPDATE_CMD_RESULT_EVENT, self.__handle_update_event)
+
+    def start(self):
+        self.loopShell.start()
+
+    def destroy(self):
+        self.loopShell.stop()
+        super().destroy()
 
 
 class TerminalUI(ttk.Frame):
@@ -180,6 +229,10 @@ class AsyncTerminalUI(TerminalUI):
             self._cmd_queue.put_nowait(None)
         elif not force:
             log.warning('the CmdHandlerThread is already stopped or maybe stopping.terminal:%s', self.terminal)
+
+    def destroy(self):
+        self.stop(True)
+        super().destroy()
 
     def __handle_update_event(self, event):
         """
