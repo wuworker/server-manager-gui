@@ -2,4 +2,5 @@
 *.iml
 logs/
 __pycache__/
-
+.Ds_Store
+test/

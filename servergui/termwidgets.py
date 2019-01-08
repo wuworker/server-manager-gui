@@ -1,6 +1,8 @@
 """
 Create by wuxingle on 2018/12/5
-简易终端
+命令处理和简易终端
+
+在调用stop时,对状态的修改还未进行同步
 """
 import queue
 import subprocess
@@ -9,6 +11,7 @@ from io import BytesIO
 from subprocess import signal
 from tkinter import *
 from tkinter import ttk
+from typing import List
 
 import pexpect
 
@@ -17,149 +20,247 @@ from servergui import logger
 log = logger.get(__name__)
 
 
-class NormalShell:
-    def __init__(self, cmd, handler=None, error_handler=None, timeout=20):
+class AsyncShell:
+    def __init__(self, async_name, cmd):
+        """
+        异步处理命令的抽象类
+        :param async_name: 异步线程名
+        :param cmd: 命令
+        """
+        self.async_name = async_name
         self.cmd = cmd
-        self.handler = handler
-        self.error_handler = error_handler
-        self.timeout = timeout
-
-    def invoke(self):
-        t = threading.Thread(target=self.__task, name='NormalShellThread')
-        t.setDaemon(True)
-        t.start()
-
-    def __task(self):
-        log.info("exc '%s' start", self.cmd)
-        try:
-            p = subprocess.Popen(self.cmd, stdout=subprocess.PIPE,
-                                 stderr=subprocess.PIPE, shell=True)
-            log.info("the normal shell thread '%s', pid :%s", self.cmd, p.pid)
-            p.wait(timeout=self.timeout)
-            code = p.returncode
-            lines_bytes = p.stdout.read().splitlines()
-            lines = list(map(lambda b: b.decode('utf-8'), lines_bytes))
-            if callable(self.handler):
-                self.handler(code, lines)
-            log.info("the normal shell thread end,cmd:%s, returncode:%s", self.cmd, code)
-        except Exception as e:
-            log.exception("the normal shell thread '%s' error:%s", self.cmd, e)
-            if callable(self.error_handler):
-                self.error_handler(e)
-
-
-class LoopShell:
-    def __init__(self, cmd, handler, error_handler=None):
-        self.cmd = cmd
-        self.handler = handler
-        self.error_handler = error_handler
-        self.__p = None
+        self.running = False
+        self.terminal = True
 
     def start(self):
-        t = threading.Thread(target=self.__task, name='LoopShellThread')
-        t.setDaemon(True)
-        t.start()
+        if self.terminal and not self.running:
+            self.running = True
+            self.terminal = False
+            t = threading.Thread(target=self.__task, name=self.async_name)
+            t.setDaemon(True)
+            t.start()
+        else:
+            log.warning("the '%s' can not start!running:%s,terminal:%s", self.async_name, self.running, self.terminal)
 
     def stop(self, force=False):
-        if self.__p is not None:
-            s = signal.SIGKILL if force else signal.SIGTERM
-            print(s)
-            self.__p.send_signal(s)
+        self.running = False
+
+    def wrapper_handle(self, func, error_handle=None):
+        """
+        handler装饰器
+        只有running为true才处理
+        """
+
+        def wrapper(*args, **kw):
+            try:
+                if self.running:
+                    func(*args, **kw)
+            except Exception as e:
+                log.exception("'%s' handle error:%s", self.async_name, e)
+                if callable(error_handle):
+                    error_handle(e)
+
+        return wrapper
+
+    def _handle_cmd(self):
+        pass
 
     def __task(self):
-        log.info('the loop shell thread start,cmd:%s', self.cmd)
+        """
+        处理命令的异步任务
+        """
+        log.info("exc '%s' start", self.cmd)
+        try:
+            self._handle_cmd()
+        finally:
+            log.info("exec '%s' end", self.cmd)
+            self.running = False
+            self.terminal = True
+
+
+class NormalShell(AsyncShell):
+    """
+    普通的shell,执行完能直接结束
+    """
+
+    def __init__(self, cmd, handler, error_handler=None, timeout=20):
+        """
+        :param handler: 命令结果回调，参数为(code,bytes)
+        :param timeout:
+        """
+        super().__init__('NormalShellThread', cmd)
+        self.handler = self.wrapper_handle(handler, error_handler)
+        self.timeout = timeout
+        self.__p: subprocess.Popen = None
+
+    def stop(self, force=False):
+        super().stop(force)
+        if not self.terminal and self.__p is not None:
+            s = signal.SIGKILL if force else signal.SIGTERM
+            self.__p.send_signal(s)
+
+    def _handle_cmd(self):
         try:
             self.__p = p = subprocess.Popen(self.cmd, stdout=subprocess.PIPE,
                                             stderr=subprocess.PIPE, shell=True)
-            log.info("the loop shell thread '%s', pid :%s", self.cmd, p.pid)
+            log.info("exec '%s', pid :%s", self.cmd, p.pid)
+            p.wait(timeout=self.timeout)
+            code = p.returncode
+            lines_bytes = p.stdout.read() if code == 0 else p.stderr.read()
+            print('-----------------', lines_bytes, '----------------')
+            self.handler(code, lines_bytes)
+        except Exception as e:
+            log.exception("exec '%s' error", e)
+            if self.__p is not None:
+                if self.__p.poll() is None:
+                    self.__p.send_signal(signal.SIGKILL)
+        finally:
+            self.__p = None
+
+
+class LoopShell(AsyncShell):
+    """
+    无法自动停止的命令，比如tail -f
+    """
+
+    def __init__(self, cmd, handler, error_handler=None):
+        """
+        :param handler:
+        :param error_handler:
+        """
+        super().__init__('LoopShellThread', cmd)
+        self.handler = self.wrapper_handle(handler, error_handler)
+        self.__p: subprocess.Popen = None
+
+    def stop(self, force=False):
+        super().stop(force)
+        if not self.terminal and self.__p is not None:
+            s = signal.SIGKILL if force else signal.SIGTERM
+            self.__p.send_signal(s)
+
+    def _handle_cmd(self):
+        try:
+            self.__p = p = subprocess.Popen(self.cmd, stdout=subprocess.PIPE,
+                                            stderr=subprocess.PIPE, shell=True)
+            log.info("exec '%s', pid :%s", self.cmd, p.pid)
             while p.poll() is None:
                 line = p.stdout.readline()
-                if line == b'' and p.poll() is not None:
+                code = p.poll()
+                if code:
+                    if code != 0:
+                        line = p.stderr.read()
+                        self.handler(code, line)
                     break
-                self.handler(line)
+                self.handler(0, line)
 
-            log.info("the loop shell thread end,cmd:%s, returncode:%s", self.cmd, p.returncode)
         except Exception as e:
-            log.exception("the loop shell thread '%s' error:%s", self.cmd, e)
-            if callable(self.error_handler):
-                self.error_handler(e)
+            log.exception("exec '%s' error", e)
+            if self.__p is not None and self.__p.poll() is None:
+                self.__p.send_signal(signal.SIGKILL)
+        finally:
+            self.__p = None
 
 
-class LoopTerminalUI(ttk.Frame):
-    # 更新终端界面的事件
-    __UPDATE_CMD_RESULT_EVENT = "<<CmdHasReturn>>"
+class InteractiveShell(AsyncShell):
+    """
+    交互式的命令，比如telnet
+    """
 
-    def __init__(self, master=None, cmd=None, **kw):
-        super().__init__(master, **kw)
-
-        def handler(line):
-            self.content.insert('end', line)
-
-        self.loopShell = LoopShell(cmd, handler)
-
-        self.content = Text(self, wrap='none')
-        self.content.insert('end', '> ' + cmd + '\n')
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(0, weight=1)
-        self.content.grid(row=0, column=0, sticky=(N, S, W, E))
-        # self.bind(OnceTerminalUI.__UPDATE_CMD_RESULT_EVENT, self.__handle_update_event)
+    def __init__(self, cmd_start, expects: List[str], handle, error_handle=None, timeout=10):
+        """
+        :param cmd_start: 初始命令
+        :param expects: [expect,send,...,expect]
+        """
+        super().__init__('InteractiveShellThread', cmd_start)
+        self.final_expect = expects[-1]
+        self.expects = expects
+        self.handle = self.wrapper_handle(handle, error_handle)
+        self.timeout = timeout
+        self._cmd_queue = queue.Queue()
+        self.__p: pexpect.spawn = None
+        self.__f: BytesIO = None
 
     def start(self):
-        self.loopShell.start()
+        while not self._cmd_queue.empty():
+            self._cmd_queue.get_nowait()
+        super().start()
 
-    def destroy(self):
-        self.loopShell.stop()
-        super().destroy()
+    def stop(self, force=False):
+        super().stop(force)
+        if not self.terminal:
+            self._cmd_queue.put_nowait(None)
+            if self.__p is not None and not self.__p.closed:
+                self.__p.close()
+                self.__p = None
+            if self.__f is not None and not self.__f.closed:
+                self.__f.close()
+                self.__f = None
+
+    def exec_cmd(self, cmd):
+        if not self.running:
+            raise RuntimeError('the interactive shell thread not start!')
+        self._cmd_queue.put(cmd)
+
+    def _handle_cmd(self):
+        try:
+            p = self.__p = pexpect.spawn(self.cmd)
+            f = self.__f = BytesIO()
+            p.logfile_read = f
+
+            for i in range(0, len(self.expects) + 1, 2):
+                res = self.__wait_expect(self.expects[i])
+                self.handle(res)
+                if i + 1 < len(self.expects):
+                    self.__send_cmd(self.expects[i + 1])
+
+            log.info("exec '%s' start interactive", self.cmd)
+            while self.running:
+                cmd = self._cmd_queue.get()
+                if cmd is None:
+                    continue
+                self.__send_cmd(cmd)
+                res = self.__wait_expect(self.final_expect)
+                log.debug('handle cmd:"%s",result:%s', cmd, 'None' if res is None else res.encode('utf-8'))
+                if res is not None:
+                    self.handle(res)
+        except pexpect.EOF:
+            size = self.__f.tell()
+            self.__f.seek(0)
+            res = self.__f.read(size).decode('utf-8')
+            self.handle(res)
+        except pexpect.ExceptionPexpect as e:
+            self.handle(str(e))
+        finally:
+            if self.running:
+                if self.__p is not None and not self.__p.closed:
+                    self.__p.close()
+                    self.__p = None
+                if self.__f is not None and not self.__f.closed:
+                    self.__f.close()
+                    self.__f = None
+
+    def __send_cmd(self, cmd):
+        self.__f.seek(0)
+        self.__p.sendline(cmd)
+
+    def __wait_expect(self, expect):
+        self.__p.expect(expect, timeout=self.timeout)
+        size = self.__f.tell()
+        self.__f.seek(0)
+        return self.__f.read(size).decode('utf-8')
 
 
-class TerminalUI(ttk.Frame):
-    """
-    同步的终端
-    """
-
-    def __init__(self, master=None, cmd_handle=None, **kw):
-        """
-        cmd_handle: 为命令的处理函数,
-                    输入为命令，输出为结果
-        """
+class BaseTerminalUI(ttk.Frame):
+    def __init__(self, master=None, **kw):
         super().__init__(master, **kw)
-        self.cmd_handle = cmd_handle
-        self.__create_widgets()
-
-    def __create_widgets(self):
         self.content = Text(self, wrap='none')
-        self.txt_cmd_var = StringVar()
-        self.txt_cmd = ttk.Entry(self, textvariable=self.txt_cmd_var)
-        self.btn_send = ttk.Button(self, text='发送')
+        self.content['state'] = 'disabled'
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
 
-        self.content.grid(row=0, column=0, columnspan=2, sticky=(N, S, W, E), pady=5)
-        self.txt_cmd.grid(row=1, column=0, sticky=(N, S, W, E), pady=5)
-        self.btn_send.grid(row=1, column=1, sticky=(N, S, E), pady=5)
-        self.content['state'] = 'disabled'
-
-        def send_cmd(*args):
-            if not callable(self.cmd_handle):
-                log.warning('the cmd_handle is not callable:%s', self.cmd_handle)
-                return
-            try:
-                res = self.cmd_handle(self.txt_cmd_var.get())
-                if res:
-                    self.add_content(res)
-            except Exception as e:
-                log.exception('handle cmd error:%s', e)
-            self.txt_cmd_var.set('')
-
-        self._bind_send_cmd(send_cmd)
-
-    def _bind_send_cmd(self, func):
-        """
-        绑定按钮和回车需要执行的函数
-        """
-        self.btn_send['command'] = func
-        self.txt_cmd.bind('<Return>', func)
+    def start(self):
+        pass
 
     def add_content(self, text):
         """
@@ -172,194 +273,83 @@ class TerminalUI(ttk.Frame):
         self.content['state'] = 'disabled'
 
 
-class AsyncTerminalUI(TerminalUI):
+class NormalTerminalUI(BaseTerminalUI):
     """
-    异步执行命令的终端UI
-    通过队列进行数据传递
+    normal类型的命令，结果使用text显示
     """
-    # 更新终端界面的事件
-    __UPDATE_CMD_RESULT_EVENT = "<<CmdHasReturn>>"
 
-    def __init__(self, master=None, cmd_handle=None, **kw):
-        super().__init__(master, cmd_handle, **kw)
-        self._cmd_queue = queue.Queue()
-        self._result_queue = queue.Queue()
-        self.bind(AsyncTerminalUI.__UPDATE_CMD_RESULT_EVENT, self.__handle_update_event)
+    def __init__(self, master=None, cmd=None, timeout=20, **kw):
+        super().__init__(master, **kw)
 
-        def btn_send(*args):
-            """
-            把命令发送到_cmd_queue
-            """
-            if self._cmd_queue.empty():
-                cmd = self.txt_cmd_var.get()
-                self._cmd_queue.put_nowait(cmd)
-            else:
-                log.warning('_cmd_queue not empty,please wait to consume cmd')
+        self.add_content('> ' + cmd + '\n')
+        self.content.grid(row=0, column=0, sticky=(N, S, W, E))
 
-        self._bind_send_cmd(btn_send)
-        self.running = False
-        self.terminal = True
+        self.normalShell = NormalShell(cmd, lambda code, line: self.add_content(line), timeout=timeout)
 
     def start(self):
-        """
-        启动线程,监听_cmd_queue队列,
-        把执行结果放入_result_queue队列,通知更新
-        """
-        if not self.running and self.terminal:
-            # 保证队列为空
-            while not self._cmd_queue.empty():
-                self._cmd_queue.get_nowait()
-            while not self._result_queue.empty():
-                self._result_queue.get_nowait()
-
-            self.running = True
-            self.terminal = False
-            t = threading.Thread(target=self.__async_handle, name='CmdHandlerThread')
-            t.setDaemon(True)
-            t.start()
-        else:
-            log.warning("the CmdHandlerThread is already start!running:%s,terminal:%s",
-                        self.running, self.terminal)
-
-    def stop(self, force=False):
-        if self.running:
-            self.running = False
-            self.txt_cmd['state'] = 'disabled'
-            self.btn_send['state'] = 'disabled'
-            self._cmd_queue.put_nowait(None)
-        elif not force:
-            log.warning('the CmdHandlerThread is already stopped or maybe stopping.terminal:%s', self.terminal)
+        self.normalShell.start()
 
     def destroy(self):
-        self.stop(True)
+        self.normalShell.stop()
         super().destroy()
 
-    def __handle_update_event(self, event):
-        """
-        处理内容更新事件
-        从_result_queue队列获取结果，进行更新
-        """
-        try:
-            content = self._result_queue.get_nowait()
-            self.txt_cmd_var.set('')
-            self.add_content(content)
-        except queue.Empty as e:
-            log.exception('can not update content:%s', e)
 
-    def __async_handle(self, *args):
-        """
-        从_cmd_queue队列获取命令
-        处理完后异步更新
-        """
-        try:
-            self._async_handle_before()
-            while self.running:
-                cmd = self._cmd_queue.get()
-                if cmd is None:
-                    continue
-                try:
-                    res = self.cmd_handle(cmd)
-                    log.debug('handle cmd:"%s",result:%s', cmd, 'None' if res is None else res.encode('utf-8'))
-                    if res is not None:
-                        self.add_content_async(res)
-                except Exception as e:
-                    log.exception('handle cmd "%s" error:%s', cmd, e)
-                    self.add_content_async(self._format_error(e))
-            self._async_handle_after()
-        except Exception as e:
-            log.exception('before or after handle cmd error:%s', e)
-            self.stop(True)
-            self.add_content_async(self._format_error(e))
-        finally:
-            self.terminal = True
-            log.info('the cmd handle thread is stopped')
-
-    def _format_error(self, e):
-        return e.__str__()
-
-    def _async_handle_before(self):
-        pass
-
-    def _async_handle_after(self):
-        pass
-
-    def add_content_async(self, text):
-        """
-        往终端异步添加内容
-        :param text: 内容
-        """
-        self._result_queue.put(text)
-        self.event_generate(AsyncTerminalUI.__UPDATE_CMD_RESULT_EVENT)
-
-
-class InteractiveTerminalUI(AsyncTerminalUI):
+class LoopTerminalUI(BaseTerminalUI):
     """
-    交互式类型的终端
-    使用pexpect
+    loop类型的命令，结果使用text显示
     """
 
-    def __init__(self, master=None, cmd_start=None, expects=None, timeout=10, **kw):
+    def __init__(self, master=None, cmd=None, **kw):
+        super().__init__(master, **kw)
+
+        self.add_content('> ' + cmd + '\n')
+        self.content.grid(row=0, column=0, sticky=(N, S, W, E))
+
+        self.loopShell = LoopShell(cmd, lambda code, line: self.add_content(line))
+
+    def start(self):
+        self.loopShell.start()
+
+    def destroy(self):
+        self.loopShell.stop()
+        super().destroy()
+
+
+class InteractiveTerminalUI(BaseTerminalUI):
+    """
+    交互式命令的终端
+    """
+
+    def __init__(self, master=None, cmd_start=None, expects: List[str] = None, **kw):
         """
-        :param cmd_start: 启动交互式的一连串命令和预期结果
-        :param expects: 每次命令的返回预期
-        :param timeout: 超时时间，秒
+        cmd_handle: 为命令的处理函数,
+                    输入为命令，输出为结果
         """
-        self.cmd_start = cmd_start
-        self.expects = expects
-        self.timeout = timeout
-        self.__p = None
-        self.__f = None
+        super().__init__(master, **kw)
+        self.txt_cmd_var = StringVar()
+        self.txt_cmd = ttk.Entry(self, textvariable=self.txt_cmd_var)
+        self.btn_send = ttk.Button(self, text='发送')
 
-        def cmd_handle(cmd):
-            try:
-                return self.__send_and_expect(cmd, self.expects)
-            except pexpect.EOF as e:
-                return self._format_error(e)
+        self.content.grid(row=0, column=0, columnspan=2, sticky=(N, S, W, E), pady=5)
+        self.txt_cmd.grid(row=1, column=0, sticky=(N, S, W, E), pady=5)
+        self.btn_send.grid(row=1, column=1, sticky=(N, S, E), pady=5)
 
-        super().__init__(master, cmd_handle, **kw)
+        def send_cmd(*args):
+            if self.interShell.running:
+                self.interShell.exec_cmd(self.txt_cmd_var.get())
+                self.txt_cmd_var.set('')
+            else:
+                self.btn_send['state'] = 'disabled'
+                self.txt_cmd['state'] = 'disabled'
 
-    def _async_handle_before(self):
-        """
-        启动交互式shell
-        """
-        self.add_content_async(self.cmd_start[0] + "\n")
-        p = self.__p = pexpect.spawn(self.cmd_start[0])
-        f = self.__f = BytesIO()
-        p.logfile_read = f
-        res = self.__expect_and_return(self.cmd_start[1])
-        self.add_content_async(res)
-        cmd_it = iter(self.cmd_start)
-        next(cmd_it)
-        next(cmd_it)
-        while True:
-            try:
-                res = self.__send_and_expect(next(cmd_it), next(cmd_it))
-                self.add_content_async(res)
-            except StopIteration:
-                break
+        self.btn_send['command'] = send_cmd
+        self.txt_cmd.bind('<Return>', send_cmd)
 
-    def _async_handle_after(self):
-        self.__p.close()
-        self.__f.close()
+        self.interShell = InteractiveShell(cmd_start, expects, lambda s: self.add_content(s))
 
-    def _format_error(self, e):
-        return super()._format_error(e) if not hasattr(e, 'last_output') else e.last_output
+    def start(self):
+        self.interShell.start()
 
-    def __send_and_expect(self, cmd, expect):
-        self.__f.seek(0)
-        self.__p.sendline(cmd)
-        return self.__expect_and_return(expect)
-
-    def __expect_and_return(self, expect):
-        try:
-            self.__p.expect(expect, timeout=self.timeout)
-            size = self.__f.tell()
-            self.__f.seek(0)
-            return self.__f.read(size).decode('utf-8')
-        except pexpect.EOF as e:
-            size = self.__f.tell()
-            self.__f.seek(0)
-            res = self.__f.read(size).decode('utf-8')
-            self.stop(True)
-            e.last_output = res
-            raise e
+    def destroy(self):
+        self.interShell.stop()
+        super().destroy()
