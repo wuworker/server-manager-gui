@@ -107,7 +107,6 @@ class NormalShell(AsyncShell):
             p.wait(timeout=self.timeout)
             code = p.returncode
             lines_bytes = p.stdout.read() if code == 0 else p.stderr.read()
-            print('-----------------', lines_bytes, '----------------')
             self.handler(code, lines_bytes)
         except Exception as e:
             log.exception("exec '%s' error", e)
@@ -125,8 +124,7 @@ class LoopShell(AsyncShell):
 
     def __init__(self, cmd, handler, error_handler=None):
         """
-        :param handler:
-        :param error_handler:
+        :param handler: 命令结果回调，参数为(code,bytes)
         """
         super().__init__('LoopShellThread', cmd)
         self.handler = self.wrapper_handle(handler, error_handler)
@@ -170,6 +168,7 @@ class InteractiveShell(AsyncShell):
         """
         :param cmd_start: 初始命令
         :param expects: [expect,send,...,expect]
+        :param handle: 命令结果回调(str)
         """
         super().__init__('InteractiveShellThread', cmd_start)
         self.final_expect = expects[-1]
