@@ -1,0 +1,110 @@
+[
+    {
+        "title": "mysql",
+        "status_cmd": "ps -ef|grep mysql|grep -v grep",
+        "sub_cmds": [
+            {
+                "name": "启动",
+                "cmd": "mysql.server start",
+                "tp": 0,
+                "expects": null
+            },
+            {
+                "name": "停止",
+                "cmd": "mysql.server stop",
+                "tp": 0,
+                "expects": null
+            },
+            {
+                "name": "配置",
+                "cmd": "cat /usr/local/etc/my.cnf",
+                "tp": 0,
+                "expects": null
+            },
+            {
+                "name": "错误日志",
+                "cmd": "tail -100f /usr/local/var/log/mysql/error.log",
+                "tp": 1,
+                "expects": null
+            },
+            {
+                "name": "终端",
+                "cmd": "mysql -uroot -p",
+                "tp": 2,
+                "expects": [
+                    "password",
+                    "123456",
+                    ">"
+                ]
+            }
+        ]
+    },
+    {
+        "title": "redis",
+        "status_cmd": "ps -ef|grep redis|grep -v grep",
+        "sub_cmds": [
+            {
+                "name": "启动",
+                "cmd": "redis-server /usr/local/etc/redis.conf",
+                "tp": 0,
+                "expects": null
+            },
+            {
+                "name": "停止",
+                "cmd": "redis-cli shutdown",
+                "tp": 0,
+                "expects": null
+            },
+            {
+                "name": "配置",
+                "cmd": "cat /usr/local/etc/redis.conf",
+                "tp": 0,
+                "expects": null
+            },
+            {
+                "name": "日志",
+                "cmd": "tail -100f /usr/local/var/log/redis/redis_6379.log",
+                "tp": 1,
+                "expects": null
+            }
+        ]
+    },
+    {
+        "title": "zookeeper",
+        "status_cmd": "ps -ef|grep zoo|grep -v grep",
+        "sub_cmds": [
+            {
+                "name": "启动",
+                "cmd": "zkServer start",
+                "tp": 0,
+                "expects": null
+            },
+            {
+                "name": "停止",
+                "cmd": "zkServer stop",
+                "tp": 0,
+                "expects": null
+            },
+            {
+                "name": "配置",
+                "cmd": "cat /usr/local/etc/zookeeper/zoo.cfg",
+                "tp": 0,
+                "expects": null
+            },
+            {
+                "name": "日志",
+                "cmd": "tail -100f /usr/local/var/log/zookeeper/zookeeper.log",
+                "tp": 1,
+                "expects": null
+            },
+            {
+                "name": "终端",
+                "cmd": "zkCli",
+                "tp": 2,
+                "expects": [
+                    "CONNECTED"
+                ]
+            }
+        ]
+    }
+]

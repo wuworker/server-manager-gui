@@ -2,6 +2,8 @@
 Create by wuxingle on 2018/12/3
 服务管理界面
 """
+import json
+import os
 from tkinter import font
 
 import PIL.Image
@@ -34,9 +36,33 @@ class CmdData:
         self.expects = expects
 
     def __str__(self):
-        return 'name:%s,cmd:%s,tp:%s,expects:%s' % (self.name, self.cmd, self.tp, self.expects)
+        return json.dumps(self, ensure_ascii=False, default=lambda obj: obj.__dict__)
 
     __repr__ = __str__
+
+    @staticmethod
+    def from_dict(d):
+        name = d['name']
+        if not name or not name.strip():
+            raise ValueError("CmdData json '%s' the name can not empty!" % (d,))
+        cmd = d['cmd']
+        if cmd and type(cmd) != str:
+            raise TypeError("CmdData json '%s' the cmd must is str!" % (d,))
+        tp = d['tp']
+        if tp is None:
+            raise ValueError("CmdData json '%s' the tp can not empty!" % (d,))
+        tp = int(tp)
+        if tp != CmdData.TYPE_OF_NORMAL and tp != CmdData.TYPE_OF_LOOP and tp != CmdData.TYPE_OF_INTERACTIVE:
+            raise ValueError("CmdData json '%s' the tp must is [0/1/2]!" % (d,))
+
+        exp = d['expects']
+        if exp and type(exp) != list:
+            raise TypeError("CmdData json '%s' the expects must is list!", d)
+        if tp == CmdData.TYPE_OF_INTERACTIVE and len(exp) == 0:
+            raise ValueError(
+                "CmdData json '%s' the expects can not empty where tp is %s" % (d, CmdData.TYPE_OF_INTERACTIVE))
+
+        return CmdData(name, cmd, tp, exp)
 
 
 class ServerData:
@@ -44,20 +70,34 @@ class ServerData:
     服务对象
     """
 
-    def __init__(self, title: str, status_cmd: str, btn_list: List[CmdData]):
+    def __init__(self, title: str, status_cmd: str, sub_cmds: List[CmdData]):
         """
         :param title: 服务名称
         :param status_cmd: 判断状态的命令
-        :param btn_list: 具体的子命令
+        :param sub_cmds: 具体的子命令
         """
         self.title = title
         self.status_cmd = status_cmd
-        self.btn_list = btn_list
+        self.sub_cmds = sub_cmds
 
     def __str__(self):
-        return 'title:%s,status_cmd:%s,btn_list:%s' % (self.title, self.status_cmd, self.btn_list)
+        return json.dumps(self, ensure_ascii=False, default=lambda obj: obj.__dict__)
 
     __repr__ = __str__
+
+    @staticmethod
+    def from_dict(d):
+        title = d['title']
+        if not title or not title.strip():
+            raise ValueError("ServerData json '%s' the title can not empty!" % (d,))
+        status_cmd = d['status_cmd']
+        if status_cmd and type(status_cmd) != str:
+            raise TypeError("ServerData json '%s' the status_cmd must is str!" % (d,))
+        sub_cmds = d['sub_cmds']
+        if sub_cmds and type(sub_cmds) != list:
+            raise TypeError("ServerData json '%s' the sub_cmds must is list!", d)
+
+        return ServerData(title, status_cmd, list(map(lambda c: CmdData.from_dict(c), sub_cmds)))
 
 
 class ServerItemUI(ttk.Frame):
@@ -65,7 +105,7 @@ class ServerItemUI(ttk.Frame):
     单个服务界面
     """
 
-    def __init__(self, master, server_data: ServerData, active_img, dead_img, **kw):
+    def __init__(self, master, server_data: ServerData, active_img=None, dead_img=None, **kw):
         """
         :param server_data: 服务对象
         :param active_img: 运行中图
@@ -98,7 +138,7 @@ class ServerItemUI(ttk.Frame):
 
         # 命令按钮
         i = 2
-        for btn_data in server_data.btn_list:
+        for btn_data in server_data.sub_cmds:
             btn = self.__create_btn(btn_data)
             btn.grid(row=i, column=0, columnspan=2, sticky=(N, S, W, E), padx=10, pady=5)
             i = i + 1
@@ -109,7 +149,7 @@ class ServerItemUI(ttk.Frame):
                 if not cmd_data.name or not cmd_data.name.strip():
                     log.warning('add server, name can not empty:%s', cmd_data)
                     return
-                server_data.btn_list.append(cmd_data)
+                server_data.sub_cmds.append(cmd_data)
                 b = self.__create_btn(cmd_data)
                 self.max_column = self.max_column + 1
                 btn_add.grid(row=self.max_column + 1, column=0, columnspan=2, sticky=(W, E), padx=10, pady=5)
@@ -153,7 +193,7 @@ class ServerItemUI(ttk.Frame):
                 name_var.set(new_data.name)
 
             def del_btn():
-                self.server_data.btn_list.remove(cmd_data)
+                self.server_data.sub_cmds.remove(cmd_data)
                 btn.grid_remove()
 
             self.show_cmd_modify_dialog('编辑', edit_handle, del_btn, cmd_data)
@@ -245,7 +285,9 @@ class ServerItemUI(ttk.Frame):
             tp = type_var.get()
             c = txt_cmd.get()
             exp = txt_expect.get('1.0', END).splitlines()
-            edit_handle(CmdData(name, c, tp, exp))
+
+            real_exp = [e for e in exp if e and e.strip()]
+            edit_handle(CmdData(name, c, tp, real_exp))
             win.destroy()
 
         btn_ok = ttk.Button(fra, text='确定', command=ok, default='active')
@@ -302,23 +344,23 @@ class MainUI(ttk.Frame):
     """
     主界面
     """
-    IMG_STATUS_ACTIVE = "../img/status_active.gif"
-    IMG_STATUS_DEAD = "../img/status_dead.gif"
 
-    def __init__(self, master=None, servers_data: List[ServerData] = None, **kw):
+    def __init__(self, master, servers_data=None, active_img_path=None, dead_img_path=None, **kw):
         super().__init__(master, **kw)
+
+        # 加载数据
         self.servers_data = servers_data
 
         # 加载图
-        self.active_img = ImageTk.PhotoImage(PIL.Image.open(MainUI.IMG_STATUS_ACTIVE))
-        self.dead_img = ImageTk.PhotoImage(PIL.Image.open(MainUI.IMG_STATUS_DEAD))
+        self.active_img = ImageTk.PhotoImage(PIL.Image.open(active_img_path))
+        self.dead_img = ImageTk.PhotoImage(PIL.Image.open(dead_img_path))
 
         # 左边界面
-        btn_add = ttk.Button(self, text='➕', command=self.__add_server)
-        btn_sub = ttk.Button(self, text='➖', command=self.__del_server)
+        btn_add = ttk.Button(self, text='➕', command=self.add_server)
+        btn_sub = ttk.Button(self, text='➖', command=self.del_server)
 
         # 服务列表
-        self.servers_name = list(map(lambda d: d.title, servers_data))
+        self.servers_name = list(map(lambda d: d.title, self.servers_data))
         self.lbox_var = StringVar(value=self.servers_name)
         self.lbox = Listbox(self, listvariable=self.lbox_var)
         self.lbox['relief'] = 'sunken'
@@ -326,13 +368,13 @@ class MainUI(ttk.Frame):
         btn_add.grid(row=0, column=0, sticky=(N, W, E))
         btn_sub.grid(row=0, column=1, sticky=(N, W, E))
         self.lbox.grid(row=1, column=0, columnspan=2, sticky=(N, W, E, S), padx=5)
-        self.lbox.bind('<<ListboxSelect>>', self.__listbox_select)
-        self.lbox.bind('<Button-2>', self.__listbox_edit)
-        self.lbox.bind('<Double-1>', self.__listbox_edit)
+        self.lbox.bind('<<ListboxSelect>>', self.__select_listbox)
+        self.lbox.bind('<Button-2>', self.edit_listbox)
+        self.lbox.bind('<Double-1>', self.edit_listbox)
 
         # 初始化右边界面
         self.server_frames: List[ServerItemUI] = []
-        for data in servers_data:
+        for data in self.servers_data:
             fra = ServerItemUI(self, data, self.active_img, self.dead_img)
             self.server_frames.append(fra)
 
@@ -346,7 +388,23 @@ class MainUI(ttk.Frame):
 
         self.lbox.select_set(0)
 
-    def __add_server(self):
+    def __select_listbox(self, *args):
+        """
+        列表选择，切换右边的界面
+        """
+        idx = self.current_select()
+        if idx == self.last_select or idx < 0 or idx >= len(self.servers_name):
+            return
+
+        self.server_frames[idx].grid(row=0, column=2, rowspan=2, sticky=(N, S, W, E), padx=5, pady=10)
+        # 刷新状态btn_refresh
+        self.server_frames[idx].status_refresh()
+        if self.last_select >= 0:
+            self.server_frames[self.last_select].grid_forget()
+
+        self.last_select = idx
+
+    def add_server(self, *args):
         def handle(s):
             if not s or not s.strip():
                 return
@@ -362,8 +420,8 @@ class MainUI(ttk.Frame):
 
         show_edit_dialog('请输入服务名', '', handle)
 
-    def __del_server(self):
-        index = self.__current_index()
+    def del_server(self, *args):
+        index = self.current_select()
         if index < 0:
             return
 
@@ -379,11 +437,11 @@ class MainUI(ttk.Frame):
         self.last_select = -1
         self.select_server(index)
 
-    def __listbox_edit(self, *args):
+    def edit_listbox(self, *args):
         """
         列表选项名字编辑
         """
-        idx = self.__current_index()
+        idx = self.current_select()
         if idx < 0 or idx >= len(self.servers_name):
             return
 
@@ -394,23 +452,7 @@ class MainUI(ttk.Frame):
 
         show_edit_dialog('编辑', self.servers_name[idx], edit)
 
-    def __listbox_select(self, *args):
-        """
-        列表选择，切换右边的界面
-        """
-        idx = self.__current_index()
-        if idx == self.last_select or idx < 0 or idx >= len(self.servers_name):
-            return
-
-        self.server_frames[idx].grid(row=0, column=2, rowspan=2, sticky=(N, S, W, E), padx=5, pady=10)
-        # 刷新状态btn_refresh
-        self.server_frames[idx].status_refresh()
-        if self.last_select >= 0:
-            self.server_frames[self.last_select].grid_forget()
-
-        self.last_select = idx
-
-    def __current_index(self) -> int:
+    def current_select(self) -> int:
         """
         当前选择的列表索引
         """
@@ -428,33 +470,50 @@ class MainUI(ttk.Frame):
         self.lbox.selection_clear(0, len(self.servers_name))
         self.lbox.select_set(index)
         self.lbox.see(index)
-        self.__listbox_select()
+        self.__select_listbox()
+
+
+def save_servers_data(data_file, servers_data):
+    with open(data_file, 'w') as f:
+        json.dump(servers_data, f, default=lambda obj: obj.__dict__, ensure_ascii=False, indent=4)
+        log.info("save %s success! %s", data_file, servers_data)
+
+
+def load_servers_data(data_file) -> List[ServerData]:
+    servers_data = []
+    if not os.path.isfile(data_file):
+        log.info("load '%s' fail,file not exist!", data_file)
+        return servers_data
+    with open(data_file, 'r') as f:
+        l = json.load(f)
+    for d in l:
+        servers_data.append(ServerData.from_dict(d))
+    log.info("load '%s' success! %s", data_file, l)
+    return servers_data
 
 
 if __name__ == '__main__':
+    DATA_FILE = '../data/servers.json'
+
+    IMG_STATUS_ACTIVE = "../img/status_active.gif"
+    IMG_STATUS_DEAD = "../img/status_dead.gif"
+
+    datas = load_servers_data(DATA_FILE)
+
     root = Tk()
     root.title('服务管理')
-    # root.resizable(False, False)
     root.rowconfigure(0, weight=1)
     root.columnconfigure(0, weight=1)
 
-    mysql_list = [CmdData('启动', '/usr/local/bin/mysql.server start', CmdData.TYPE_OF_NORMAL),
-                  CmdData('停止', '/usr/local/bin/mysql.server stop', CmdData.TYPE_OF_NORMAL),
-                  CmdData('重启', '/usr/local/bin/mysql.server restart', CmdData.TYPE_OF_NORMAL),
-                  CmdData('日志', 'tail -f /usr/local/var/log/mysql/error.log', CmdData.TYPE_OF_LOOP),
-                  CmdData('终端', 'mysql -uroot -p', CmdData.TYPE_OF_INTERACTIVE, ['password', '123456', '>'])]
-
-    mysql_data = ServerData(title='mysql', status_cmd='ps -ef|grep mysql|grep -v grep', btn_list=mysql_list)
-
-    redis_list = [CmdData('启动1', 'ls', CmdData.TYPE_OF_NORMAL),
-                  CmdData('停止1', 'ls', CmdData.TYPE_OF_NORMAL),
-                  CmdData('重启1', 'ls', CmdData.TYPE_OF_NORMAL),
-                  CmdData('日志1', 'ls', CmdData.TYPE_OF_LOOP),
-                  CmdData('终端1', 'ls', CmdData.TYPE_OF_INTERACTIVE)]
-
-    redis_data = ServerData(title='redis', status_cmd='ps -ef|grep redis', btn_list=redis_list)
-
-    mainui = MainUI(root, servers_data=[mysql_data, redis_data], padding=5)
+    mainui = MainUI(root, servers_data=datas, active_img_path=IMG_STATUS_ACTIVE, dead_img_path=IMG_STATUS_DEAD,
+                    padding=5)
     mainui.grid(row=0, column=0, sticky=(N, S, W, E))
 
+
+    def on_closing(*args):
+        save_servers_data(DATA_FILE, datas)
+        root.destroy()
+
+
+    root.protocol("WM_DELETE_WINDOW", on_closing)
     root.mainloop()

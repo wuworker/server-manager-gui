@@ -219,6 +219,7 @@ class InteractiveShell(AsyncShell):
                     continue
                 self.__send_cmd(cmd)
                 res = self.__wait_expect(self.final_expect)
+
                 log.debug('handle cmd:"%s",result:%s', cmd, 'None' if res is None else res.encode('utf-8'))
                 if res is not None:
                     self.handle(res)
