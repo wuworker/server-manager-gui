@@ -3,6 +3,7 @@ Create by wuxingle on 2019/2/16
 基本数据对象
 """
 import json
+import os
 from typing import List
 
 
@@ -89,3 +90,29 @@ class ServerData:
             raise TypeError("ServerData json '%s' the sub_cmds must is list!", d)
 
         return ServerData(title, status_cmd, list(map(lambda c: CmdData.from_dict(c), sub_cmds)))
+
+
+def save_servers_data(data_file, servers_data: List[ServerData]):
+    """
+    保存数据到文件
+    :param data_file: 文件路径
+    :param servers_data: 数据
+    """
+    with open(data_file, 'w') as f:
+        json.dump(servers_data, f, default=lambda obj: obj.__dict__, ensure_ascii=False, indent=4)
+
+
+def load_servers_data(data_file) -> List[ServerData]:
+    """
+    从文件读取数据
+    :param data_file: 文件路径
+    :return: 数据
+    """
+    servers_data = []
+    if not os.path.isfile(data_file):
+        raise RuntimeError("the file:'%s' not exists!" % (data_file,))
+    with open(data_file, 'r') as f:
+        l = json.load(f)
+    for d in l:
+        servers_data.append(ServerData.from_dict(d))
+    return servers_data

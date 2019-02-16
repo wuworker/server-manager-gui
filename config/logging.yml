@@ -17,7 +17,7 @@ handlers:
     class: logging.handlers.TimedRotatingFileHandler
     level: INFO
     formatter: simple
-    filename: ../logs/servergui.log
+    filename: ./logs/servergui.log
     when: MIDNIGHT
     interval: 1
     backupCount: 3
