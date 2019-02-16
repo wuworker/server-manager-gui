@@ -2,9 +2,9 @@
 Create by wuxingle on 2018/12/3
 服务管理界面
 """
-import json
 import os
 from tkinter import font
+from tkinter import messagebox
 
 import PIL.Image
 from PIL import ImageTk
@@ -13,91 +13,6 @@ from servergui.dialog import *
 from servergui.termwidgets import *
 
 log = logger.get(__name__)
-
-
-class CmdData:
-    """
-    命令对象
-    """
-    TYPE_OF_NORMAL = 0
-    TYPE_OF_LOOP = 1
-    TYPE_OF_INTERACTIVE = 2
-
-    def __init__(self, name: str, cmd: str, tp: int, expects: List[str] = None):
-        """
-        :param name: 命令名称
-        :param cmd: 具体命令
-        :param tp: 命令类型
-        :param expects: 交互式类型的预期返回等
-        """
-        self.name = name
-        self.cmd = cmd
-        self.tp = tp
-        self.expects = expects
-
-    def __str__(self):
-        return json.dumps(self, ensure_ascii=False, default=lambda obj: obj.__dict__)
-
-    __repr__ = __str__
-
-    @staticmethod
-    def from_dict(d):
-        name = d['name']
-        if not name or not name.strip():
-            raise ValueError("CmdData json '%s' the name can not empty!" % (d,))
-        cmd = d['cmd']
-        if cmd and type(cmd) != str:
-            raise TypeError("CmdData json '%s' the cmd must is str!" % (d,))
-        tp = d['tp']
-        if tp is None:
-            raise ValueError("CmdData json '%s' the tp can not empty!" % (d,))
-        tp = int(tp)
-        if tp != CmdData.TYPE_OF_NORMAL and tp != CmdData.TYPE_OF_LOOP and tp != CmdData.TYPE_OF_INTERACTIVE:
-            raise ValueError("CmdData json '%s' the tp must is [0/1/2]!" % (d,))
-
-        exp = d['expects']
-        if exp and type(exp) != list:
-            raise TypeError("CmdData json '%s' the expects must is list!", d)
-        if tp == CmdData.TYPE_OF_INTERACTIVE and len(exp) == 0:
-            raise ValueError(
-                "CmdData json '%s' the expects can not empty where tp is %s" % (d, CmdData.TYPE_OF_INTERACTIVE))
-
-        return CmdData(name, cmd, tp, exp)
-
-
-class ServerData:
-    """
-    服务对象
-    """
-
-    def __init__(self, title: str, status_cmd: str, sub_cmds: List[CmdData]):
-        """
-        :param title: 服务名称
-        :param status_cmd: 判断状态的命令
-        :param sub_cmds: 具体的子命令
-        """
-        self.title = title
-        self.status_cmd = status_cmd
-        self.sub_cmds = sub_cmds
-
-    def __str__(self):
-        return json.dumps(self, ensure_ascii=False, default=lambda obj: obj.__dict__)
-
-    __repr__ = __str__
-
-    @staticmethod
-    def from_dict(d):
-        title = d['title']
-        if not title or not title.strip():
-            raise ValueError("ServerData json '%s' the title can not empty!" % (d,))
-        status_cmd = d['status_cmd']
-        if status_cmd and type(status_cmd) != str:
-            raise TypeError("ServerData json '%s' the status_cmd must is str!" % (d,))
-        sub_cmds = d['sub_cmds']
-        if sub_cmds and type(sub_cmds) != list:
-            raise TypeError("ServerData json '%s' the sub_cmds must is list!", d)
-
-        return ServerData(title, status_cmd, list(map(lambda c: CmdData.from_dict(c), sub_cmds)))
 
 
 class ServerItemUI(ttk.Frame):
@@ -155,7 +70,7 @@ class ServerItemUI(ttk.Frame):
                 btn_add.grid(row=self.max_column + 1, column=0, columnspan=2, sticky=(W, E), padx=10, pady=5)
                 b.grid(row=self.max_column, column=0, columnspan=2, sticky=(N, S, W, E), padx=10, pady=5)
 
-            self.show_cmd_modify_dialog('添加', add_cmd)
+            show_cmd_modify_dialog('添加', add_cmd)
 
         btn_add = ttk.Button(self, text='➕', command=add_cmd_btn)
         btn_add.grid(row=i, column=0, columnspan=2, sticky=(W, E), padx=10, pady=5)
@@ -196,7 +111,7 @@ class ServerItemUI(ttk.Frame):
                 self.server_data.sub_cmds.remove(cmd_data)
                 btn.grid_remove()
 
-            self.show_cmd_modify_dialog('编辑', edit_handle, del_btn, cmd_data)
+            show_cmd_modify_dialog('编辑', edit_handle, del_btn, cmd_data)
 
         name_var = StringVar(value=cmd_data.name)
         btn = ttk.Button(self, textvariable=name_var, command=self.__invoke_cmd(cmd_data))
@@ -235,92 +150,6 @@ class ServerItemUI(ttk.Frame):
 
         return click
 
-    def show_cmd_modify_dialog(self, title, edit_handle, del_handle=None,
-                               init_data: CmdData = CmdData('', '', CmdData.TYPE_OF_NORMAL, [])):
-        """
-        编辑命令对话框
-        :param title: 标题
-        :param edit_handle: 命令处理函数
-        :param del_handle: 点击删除的处理函数
-        :param init_data: 初始化数据
-        """
-        win = BaseDialog(title)
-        fra = win.content()
-
-        lab_name = ttk.Label(fra, text='名称:')
-        txt_name = ttk.Entry(fra)
-        txt_name.insert(END, init_data.name)
-        txt_name.focus_set()
-
-        lab_type = ttk.Label(fra, text='命令类型:')
-        type_var = IntVar(0)
-
-        def cmd_radio():
-            if type_var.get() == 2:
-                txt_expect['state'] = 'normal'
-                lab_expect['foreground'] = ''
-            else:
-                txt_expect['state'] = 'disabled'
-                lab_expect['foreground'] = 'gray'
-
-        type1 = ttk.Radiobutton(fra, text='普通', variable=type_var, value=CmdData.TYPE_OF_NORMAL, command=cmd_radio)
-        type2 = ttk.Radiobutton(fra, text='循环', variable=type_var, value=CmdData.TYPE_OF_LOOP, command=cmd_radio)
-        type3 = ttk.Radiobutton(fra, text='交互式', variable=type_var, value=CmdData.TYPE_OF_INTERACTIVE,
-                                command=cmd_radio)
-        type_var.set(init_data.tp)
-
-        lab_cmd = ttk.Label(fra, text='命令:')
-        txt_cmd = ttk.Entry(fra)
-        txt_cmd.insert(END, init_data.cmd)
-
-        lab_expect = ttk.Label(fra, text='预期响应:', foreground='gray')
-        txt_expect = Text(fra, height=5)
-
-        if init_data.expects is not None:
-            for line in init_data.expects:
-                txt_expect.insert(END, line + '\n')
-
-        def ok(*args):
-            name = txt_name.get()
-            tp = type_var.get()
-            c = txt_cmd.get()
-            exp = txt_expect.get('1.0', END).splitlines()
-
-            real_exp = [e for e in exp if e and e.strip()]
-            edit_handle(CmdData(name, c, tp, real_exp))
-            win.destroy()
-
-        btn_ok = ttk.Button(fra, text='确定', command=ok, default='active')
-        cmd_radio()
-
-        lab_name.grid(row=0, column=0, columnspan=6, sticky=(W, E))
-        txt_name.grid(row=1, column=0, columnspan=6, sticky=(W, E), pady=5)
-        lab_type.grid(row=2, column=0, columnspan=6, sticky=(W, E))
-        type1.grid(row=3, column=0, columnspan=2, pady=5)
-        type2.grid(row=3, column=2, columnspan=2, pady=5)
-        type3.grid(row=3, column=4, columnspan=2, pady=5)
-        lab_cmd.grid(row=4, column=0, columnspan=6, sticky=(W, E))
-        txt_cmd.grid(row=5, column=0, columnspan=6, sticky=(W, E), pady=5)
-        lab_expect.grid(row=6, column=0, columnspan=6, sticky=(W, E))
-        txt_expect.grid(row=7, column=0, columnspan=6, sticky=(W, E, N, S), pady=5)
-
-        if del_handle is None:
-            btn_ok.grid(row=8, column=0, columnspan=6, pady=5)
-        # 需要显示删除按钮
-        else:
-            def del_btn(*args):
-                del_handle()
-                win.destroy()
-
-            btn_del = ttk.Button(fra, text='删除此按钮', command=del_btn)
-            btn_ok.grid(row=8, column=0, columnspan=3, pady=5)
-            btn_del.grid(row=8, column=3, columnspan=3, pady=5)
-
-        for i in range(0, 6):
-            fra.columnconfigure(i, weight=1)
-        fra.rowconfigure(7, weight=1)
-        win.bind('<Return>', ok)
-
     def set_title(self, value):
         self.server_data.title = value
         self.title_var.set(value)
@@ -345,13 +174,12 @@ class MainUI(ttk.Frame):
     主界面
     """
 
-    def __init__(self, master, servers_data=None, active_img_path=None, dead_img_path=None, **kw):
+    def __init__(self, master, servers_data, close_handle=None,
+                 active_img_path=None, dead_img_path=None, **kw):
         super().__init__(master, **kw)
 
-        # 加载数据
         self.servers_data = servers_data
-
-        # 加载图
+        self.close_handle = close_handle
         self.active_img = ImageTk.PhotoImage(PIL.Image.open(active_img_path))
         self.dead_img = ImageTk.PhotoImage(PIL.Image.open(dead_img_path))
 
@@ -378,6 +206,10 @@ class MainUI(ttk.Frame):
             fra = ServerItemUI(self, data, self.active_img, self.dead_img)
             self.server_frames.append(fra)
 
+        # 初始化作者
+        lab_author = ttk.Label(self, text='2019-02-06  wuxingle')
+        lab_author.grid(row=2, column=0, columnspan=3, sticky=(N, S, E))
+
         self.last_select = -1
         self.select_server(0)
 
@@ -387,6 +219,12 @@ class MainUI(ttk.Frame):
         self.columnconfigure(2, weight=1)
 
         self.lbox.select_set(0)
+
+    def destroy(self):
+        if callable(self.close_handle):
+            self.close_handle()
+
+        super().destroy()
 
     def __select_listbox(self, *args):
         """
@@ -405,6 +243,8 @@ class MainUI(ttk.Frame):
         self.last_select = idx
 
     def add_server(self, *args):
+        print(args)
+
         def handle(s):
             if not s or not s.strip():
                 return
@@ -418,6 +258,7 @@ class MainUI(ttk.Frame):
             self.server_frames.append(fra)
             self.select_server(len(self.servers_name) - 1)
 
+        print(super().winfo_x(), super().winfo_y())
         show_edit_dialog('请输入服务名', '', handle)
 
     def del_server(self, *args):
@@ -501,19 +342,29 @@ if __name__ == '__main__':
     datas = load_servers_data(DATA_FILE)
 
     root = Tk()
+    # 隐藏窗口
+    root.withdraw()
+
     root.title('服务管理')
     root.rowconfigure(0, weight=1)
     root.columnconfigure(0, weight=1)
 
-    mainui = MainUI(root, servers_data=datas, active_img_path=IMG_STATUS_ACTIVE, dead_img_path=IMG_STATUS_DEAD,
+
+    def on_closing():
+        save = messagebox.askquestion('关闭', '是否保存当前配置')
+        if save == 'yes':
+            save_servers_data(DATA_FILE, datas)
+
+
+    mainui = MainUI(root, datas, close_handle=on_closing,
+                    active_img_path=IMG_STATUS_ACTIVE, dead_img_path=IMG_STATUS_DEAD,
                     padding=5)
     mainui.grid(row=0, column=0, sticky=(N, S, W, E))
 
+    root.update_idletasks()
+    root.deiconify()
+    root.withdraw()
+    root.geometry('%sx%s+%s+%s' % (root.winfo_width(), root.winfo_height(), 200, 200))
+    root.deiconify()
 
-    def on_closing(*args):
-        save_servers_data(DATA_FILE, datas)
-        root.destroy()
-
-
-    root.protocol("WM_DELETE_WINDOW", on_closing)
     root.mainloop()
